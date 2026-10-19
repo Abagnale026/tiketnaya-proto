@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<meta name="theme-color" content="#0E0E12">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Тикетная">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-192.png">
+<title>Тикетная</title>
+<style>
+  :root{color-scheme:dark}
+  body{margin:0;min-height:100vh;min-height:100dvh;display:flex;align-items:center;justify-content:center;background:#0E0E12;color:#ECEBF2;
+    font:400 15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;padding:0 16px}
+  form{display:flex;flex-direction:column;gap:12px;width:min(340px,100%);padding:24px;border:1px solid #26262F;border-radius:16px;background:#16161C}
+  b{display:flex;align-items:center;gap:10px;font-size:20px}
+  b::before{content:"";width:12px;height:12px;border-radius:3px;background:#C8FF3D}
+  p{margin:0;color:#8C8B99;font-size:14px}
+  input{padding:12px 13px;border:1px solid #34343F;border-radius:10px;background:#1D1D25;color:#ECEBF2;font:inherit;font-size:16px}
+  input:focus{outline:2px solid #C8FF3D;outline-offset:1px}
+  button{padding:12px 13px;border:0;border-radius:10px;background:#C8FF3D;color:#0E0E12;font:600 15px/1 inherit;cursor:pointer}
+  button[disabled]{opacity:.6;cursor:progress}
+  .msg{min-height:18px;font-size:13px;color:#FF5A5F}
+  .msg.wait,#wait{color:#8C8B99}
+</style>
+</head>
+<body>
+<p id="wait">Открываю…</p>
+<form id="gate" autocomplete="on" hidden>
+  <b>Тикетная</b>
+  <p>Прототип техподдержки. Доступ по паролю.</p>
+  <input id="pw" type="password" name="password" autocomplete="current-password" aria-label="Пароль" required>
+  <button id="go" type="submit">Открыть</button>
+  <span class="msg" id="msg" role="status"></span>
+</form>
+<script>
+// Прототип лежит в app.bin зашифрованным: ключ = PBKDF2(пароль, соль, 200000, SHA-256), данные — AES-GCM.
+// После верного пароля ключ запоминается на этом устройстве, чтобы приложение с экрана «Домой» открывалось сразу.
+// Новая сборка — новая соль: старый ключ не подойдёт, и пароль спросят снова.
+(() => {
+  const KEY = 'tiketnayaKey', gate = document.getElementById('gate'), wait = document.getElementById('wait');
+  const pw = document.getElementById('pw'), go = document.getElementById('go'), msg = document.getElementById('msg');
+  const toB64 = u8 => btoa(String.fromCharCode(...u8)), fromB64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+  const say = (text, waiting) => { msg.textContent = text; msg.className = 'msg' + (waiting ? ' wait' : ''); };
+  const show = () => { wait.hidden = true; gate.hidden = false; pw.focus(); };
+  const render = plain => { const html = new TextDecoder().decode(plain); document.open(); document.write(html); document.close(); };
+  const decrypt = (key, bytes) => crypto.subtle.decrypt({ name: 'AES-GCM', iv: bytes.slice(16, 28) }, key, bytes.slice(28));
+  (async () => {
+    let bytes;
+    try {
+      const response = await fetch('./app.bin', { cache: 'no-store' });
+      if (!response.ok) throw new Error('нет app.bin');
+      bytes = new Uint8Array(await response.arrayBuffer());
+    } catch (error) { show(); say('Не загрузилось, обновите страницу'); go.disabled = true; return; }
+    const salt = toB64(bytes.slice(0, 16));
+    try {
+      const saved = JSON.parse(localStorage.getItem(KEY) || 'null');
+      if (saved && saved.salt === salt) {
+        const key = await crypto.subtle.importKey('raw', fromB64(saved.k), 'AES-GCM', false, ['decrypt']);
+        return render(await decrypt(key, bytes));
+      }
+    } catch (error) {}
+    show();
+    gate.addEventListener('submit', async event => {
+      event.preventDefault();
+      go.disabled = true; say('Расшифровываю…', true);
+      try {
+        const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(pw.value), 'PBKDF2', false, ['deriveKey']);
+        const key = await crypto.subtle.deriveKey({ name: 'PBKDF2', salt: bytes.slice(0, 16), iterations: 200000, hash: 'SHA-256' },
+          material, { name: 'AES-GCM', length: 256 }, true, ['decrypt']);
+        const plain = await decrypt(key, bytes);
+        try { localStorage.setItem(KEY, JSON.stringify({ salt, k: toB64(new Uint8Array(await crypto.subtle.exportKey('raw', key))) })); } catch (error) {}
+        render(plain);
+      } catch (error) {
+        go.disabled = false;
+        say(error && error.name === 'OperationError' ? 'Пароль не подошёл' : 'Не открылось: ' + (error && error.message || error));
+        pw.select();
+      }
+    });
+  })();
+})();
+</script>
+</body>
+</html>
