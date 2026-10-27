@@ -9,7 +9,7 @@ self.addEventListener('notificationclick', e => {
     const wins = await self.clients.matchAll({type: 'window', includeUncontrolled: true});
     if (wins.length){
       await wins[0].focus();
-      if (data.ticket) wins[0].postMessage({open: data.ticket});
+      if (data.ticket) wins[0].postMessage({open: data.ticket, fav: data.fav});
       return;
     }
     await self.clients.openWindow(data.url || self.registration.scope);
